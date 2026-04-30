@@ -12,7 +12,7 @@ Ana özellikler:
     * Spot ↔ Spot
     * VİOP ↔ VİOP
     * Farklı dayanaklar: örn. THYAO spot ↔ F_PGSUS0526
-- Spot/VİOP sembolleri manuel girilebilir.
+- Spot/VİOP sembolleri dropdown üzerinden seçilebilir.
 
 Not:
 Aynı dayanak dışındaki eşleşmeler klasik risksiz arbitraj değildir; relative-value/spread analizidir.
@@ -56,7 +56,7 @@ IST = pytz.timezone("Europe/Istanbul")
 # VİOP pay vadeli dayanak evreni
 # -----------------------------------------------------------------------------
 # Buradaki liste bilerek geniş tutuldu. Veri kaynağında olmayan semboller zaten fiyat
-# üretmez. Yeni kontrat eklenirse sidebar'daki "Manuel sembol ekle" alanından eklenebilir.
+# üretmez. Pair seçimi özel analiz ekranındaki dropdown menülerinden yapılır.
 COMMON_VIOP_UNDERLYINGS = [
     "AEFES", "AGHOL", "AKBNK", "AKSEN", "ALARK", "ARCLK", "ASELS", "ASTOR",
     "BIMAS", "BRSAN", "CCOLA", "CIMSA", "DOAS", "DOHOL", "EKGYO", "ENJSA",
@@ -152,6 +152,57 @@ st.markdown(
     /* Info boxes should stay readable */
     .block-container [data-testid="stAlert"] * {
         color: #111827 !important;
+    }
+
+
+    /* Force Streamlit dropdowns to stay readable on light canvas */
+    .block-container [data-testid="stSelectbox"] [data-baseweb="select"] > div {
+        background-color: #ffffff !important;
+        border: 1px solid #cbd5e1 !important;
+        border-radius: 10px !important;
+        color: #111827 !important;
+        box-shadow: none !important;
+    }
+    .block-container [data-testid="stSelectbox"] [data-baseweb="select"] span,
+    .block-container [data-testid="stSelectbox"] [data-baseweb="select"] div,
+    .block-container [data-testid="stSelectbox"] [data-baseweb="select"] input {
+        color: #111827 !important;
+        -webkit-text-fill-color: #111827 !important;
+    }
+    .block-container [data-testid="stSelectbox"] svg {
+        color: #111827 !important;
+        fill: #111827 !important;
+    }
+
+    /* Dropdown menu/popover readability */
+    div[data-baseweb="popover"],
+    div[data-baseweb="popover"] * {
+        color: #111827 !important;
+    }
+    div[data-baseweb="popover"] ul,
+    div[data-baseweb="popover"] [role="listbox"],
+    div[data-baseweb="popover"] [data-baseweb="menu"] {
+        background-color: #ffffff !important;
+        color: #111827 !important;
+    }
+    div[data-baseweb="popover"] li,
+    div[data-baseweb="popover"] [role="option"] {
+        background-color: #ffffff !important;
+        color: #111827 !important;
+    }
+    div[data-baseweb="popover"] li:hover,
+    div[data-baseweb="popover"] [role="option"]:hover {
+        background-color: #eef2ff !important;
+        color: #111827 !important;
+    }
+
+    /* Inputs/number inputs used in advanced controls */
+    .block-container [data-testid="stTextInput"] input,
+    .block-container [data-testid="stNumberInput"] input {
+        background-color: #ffffff !important;
+        color: #111827 !important;
+        -webkit-text-fill-color: #111827 !important;
+        border: 1px solid #cbd5e1 !important;
     }
 
     /* Selection color: prevents the aggressive blue block look when text is accidentally selected */
@@ -578,17 +629,7 @@ if auto_refresh:
 
 st.sidebar.divider()
 st.sidebar.subheader("Dayanak Evreni")
-
-manual_add_text = st.sidebar.text_area(
-    "Manuel dayanak/sembol ekle",
-    value="",
-    placeholder="Örn: TABGD, ALTNY, PGSUS",
-    height=72,
-    help="Bu alana yazdığın semboller spot ve VİOP veri çekim evrenine eklenir.",
-)
-manual_symbols = parse_manual_symbols(manual_add_text)
-
-all_candidate_underlyings = sorted(set(DEFAULT_UNDERLYINGS + manual_symbols))
+all_candidate_underlyings = sorted(set(DEFAULT_UNDERLYINGS))
 
 use_full_universe = st.sidebar.toggle(
     "Tüm vadeli pay dayanak evrenini tara",
@@ -759,14 +800,12 @@ else:
         if long_type == "Spot":
             default_idx = spot_options.index("THYAO") if "THYAO" in spot_options else 0
             long_choice = st.selectbox("Long spot hisse", spot_options, index=default_idx, key="long_spot_select")
-            long_manual = st.text_input("Long spot manuel sembol", value=long_choice, key="long_spot_manual")
-            long_symbol = normalize_symbol(long_manual or long_choice)
+            long_symbol = normalize_symbol(long_choice)
         else:
             default_contract = get_viop_code("AKBNK", contract_months[0][0], contract_months[0][1]) if contract_months else "F_AKBNK0526"
             default_idx = viop_options.index(default_contract) if default_contract in viop_options else 0
             long_choice = st.selectbox("Long VİOP kontratı", viop_options, index=default_idx, key="long_viop_select")
-            long_manual = st.text_input("Long VİOP manuel kontrat", value=long_choice, key="long_viop_manual")
-            long_symbol = normalize_symbol(long_manual or long_choice)
+            long_symbol = normalize_symbol(long_choice)
 
     with right_cfg:
         st.markdown("### 2. Bacak: Short / Satılacak")
@@ -774,14 +813,12 @@ else:
         if short_type == "Spot":
             default_idx = spot_options.index("PGSUS") if "PGSUS" in spot_options else 0
             short_choice = st.selectbox("Short spot hisse", spot_options, index=default_idx, key="short_spot_select")
-            short_manual = st.text_input("Short spot manuel sembol", value=short_choice, key="short_spot_manual")
-            short_symbol = normalize_symbol(short_manual or short_choice)
+            short_symbol = normalize_symbol(short_choice)
         else:
             default_contract = get_viop_code("PGSUS", contract_months[0][0], contract_months[0][1]) if contract_months else "F_PGSUS0526"
             default_idx = viop_options.index(default_contract) if default_contract in viop_options else 0
             short_choice = st.selectbox("Short VİOP kontratı", viop_options, index=default_idx, key="short_viop_select")
-            short_manual = st.text_input("Short VİOP manuel kontrat", value=short_choice, key="short_viop_manual")
-            short_symbol = normalize_symbol(short_manual or short_choice)
+            short_symbol = normalize_symbol(short_choice)
 
     long_price, long_clean, long_underlying, long_expiry = resolve_price(
         long_type, long_symbol, spots, viops, selected_underlyings
