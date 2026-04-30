@@ -1,148 +1,84 @@
+
 """
-Streamlit diagnostic page for VİOP Arbitraj Dashboard.
-Upload this file to: pages/99_Veriyi_Test_Et.py
-Then open the Streamlit app and select 'Veriyi Test Et' from the sidebar.
+Veri bağlantı test sayfası — v2
+Terminal kullanmadan spot, VİOP ve özellikle temettü parse sorununu teşhis eder.
 """
-import json
-import traceback
+
 from datetime import datetime
+import inspect
+import re
 
 import pandas as pd
-import requests
+import pytz
 import streamlit as st
 
-from src.data_fetcher import DataFetcher, DividendFetcher, DEFAULT_HEADERS
-from src.config import DASHBOARD_STOCKS
+from src.data_fetcher import DataFetcher, DividendFetcher
 
-st.set_page_config(page_title="Veri Testi", page_icon="🔎", layout="wide")
+
+st.set_page_config(page_title="Veriyi Test Et", page_icon="🔎", layout="wide")
+
 st.title("🔎 Veri Bağlantı Testi")
 st.caption("Terminal kullanmadan spot, VİOP ve temettü veri kaynaklarını test eder.")
 
-TEST_SYMBOL = st.selectbox("Test sembolü", ["AKBNK", "THYAO", "GARAN", "ISCTR", "YKBNK", "ASELS", "TUPRS"])
+symbol = st.text_input("Test sembolü", value="AKBNK").strip().upper() or "AKBNK"
 
-SPOT_ENDPOINTS = [
-    (
-        "SPOT XU100 / IndexHisseSenedi endeks=01",
-        "https://www.isyatirim.com.tr/_layouts/15/IsYatirim.Website/Common/Data.aspx/IndexHisseSenedi",
-        {"endeks": "01"},
-    ),
-    (
-        "SPOT XU030 / IndexHisseSenedi endeks=08",
-        "https://www.isyatirim.com.tr/_layouts/15/IsYatirim.Website/Common/Data.aspx/IndexHisseSenedi",
-        {"endeks": "08"},
-    ),
-]
+if st.button("Cache temizle / testi yeniden başlat"):
+    st.cache_data.clear()
+    st.rerun()
 
-VIOP_ENDPOINT = (
-    "VİOP / ViopHisse",
-    "https://www.isyatirim.com.tr/_layouts/15/IsYatirim.Website/Common/Data.aspx/ViopHisse",
-    {"hisse": TEST_SYMBOL},
-)
+st.write("Test zamanı:", datetime.now(pytz.timezone("Europe/Istanbul")).strftime("%Y-%m-%d %H:%M:%S"))
 
-DIVIDEND_ENDPOINT = (
-    "Temettü / sermaye-artirimlari-ve-temettuler",
-    "https://www.isyatirim.com.tr/tr-tr/analiz/hisse/Sayfalar/sermaye-artirimlari-ve-temettuler.aspx",
-    {"hisse": TEST_SYMBOL},
-)
+fetcher = DataFetcher()
+div_fetcher = DividendFetcher()
 
+st.header("1) Proje fonksiyonları testi")
 
-def raw_get(name, url, params):
-    row = {"name": name, "url": url, "params": params}
+c1, c2, c3 = st.columns(3)
+
+with c1:
     try:
-        r = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=15)
-        row["status_code"] = r.status_code
-        row["content_type"] = r.headers.get("content-type", "")
-        row["final_url"] = r.url
-        row["text_head"] = r.text[:1000]
-        try:
-            js = r.json()
-            row["json_type"] = type(js).__name__
-            if isinstance(js, dict):
-                row["json_keys"] = list(js.keys())[:20]
-                val = js.get("value")
-                row["value_type"] = type(val).__name__
-                row["value_len"] = len(val) if hasattr(val, "__len__") else None
-                row["value_sample"] = val[:3] if isinstance(val, list) else val
-            elif isinstance(js, list):
-                row["value_len"] = len(js)
-                row["value_sample"] = js[:3]
-        except Exception as e:
-            row["json_error"] = str(e)
+        spots = fetcher.fetch_all_spot_prices()
+        st.metric("Spot adet", len(spots))
+        st.write({k: spots.get(k) for k in [symbol, "AKBNK", "THYAO", "PGSUS"] if spots.get(k) is not None})
     except Exception as e:
-        row["error"] = str(e)
-        row["traceback"] = traceback.format_exc()
-    return row
+        st.error(f"Spot hata: {e}")
 
+with c2:
+    try:
+        viops = fetcher.fetch_viop_for_symbol(symbol)
+        st.metric(f"{symbol} VİOP adet", len(viops))
+        st.write(dict(list(viops.items())[:10]))
+    except Exception as e:
+        st.error(f"VİOP hata: {e}")
 
-if st.button("Testi Çalıştır", type="primary"):
-    st.write(f"Test zamanı: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+with c3:
+    try:
+        divs = div_fetcher.fetch_dividends(symbol)
+        st.metric(f"{symbol} temettü adet", len(divs))
+        st.write(divs[:10])
+    except Exception as e:
+        st.error(f"Temettü hata: {e}")
 
-    st.subheader("1) Ham endpoint testi")
-    raw_rows = []
-    for endpoint in SPOT_ENDPOINTS + [VIOP_ENDPOINT, DIVIDEND_ENDPOINT]:
-        raw_rows.append(raw_get(*endpoint))
+st.header("2) Temettü parser teşhis")
 
-    summary = pd.DataFrame([
-        {
-            "name": r.get("name"),
-            "status_code": r.get("status_code"),
-            "content_type": r.get("content_type"),
-            "value_len": r.get("value_len"),
-            "json_error": r.get("json_error"),
-            "error": r.get("error"),
-        }
-        for r in raw_rows
-    ])
-    st.dataframe(summary, use_container_width=True)
+st.write("DividendFetcher class:", str(DividendFetcher))
+st.write("DividendFetcher dosyası:", inspect.getfile(DividendFetcher))
 
-    with st.expander("Ham yanıt detayları"):
-        for r in raw_rows:
-            st.markdown(f"### {r.get('name')}")
-            st.write("URL:", r.get("final_url", r.get("url")))
-            st.write("Status:", r.get("status_code"), "Content-Type:", r.get("content_type"))
-            if "value_sample" in r:
-                st.write("JSON sample:")
-                st.json(r["value_sample"])
-            st.write("Text head:")
-            st.code(r.get("text_head", ""), language="text")
+version = getattr(__import__("src.data_fetcher", fromlist=["DIVIDEND_FETCHER_VERSION"]), "DIVIDEND_FETCHER_VERSION", "VERSION_YOK")
+st.write("DividendFetcher version:", version)
 
-    st.subheader("2) Proje fonksiyonları testi")
-    fetcher = DataFetcher()
-    div_fetcher = DividendFetcher()
+if hasattr(div_fetcher, "debug_fetch_dividend_html"):
+    dbg = div_fetcher.debug_fetch_dividend_html(symbol)
+    st.subheader("debug_fetch_dividend_html sonucu")
+    st.json({k: v for k, v in dbg.items() if k not in ["sample", "parsed_rows"]})
+    st.write("Parsed rows:")
+    st.write(dbg.get("parsed_rows", [])[:10])
+    st.text_area("Ham sayfa örneği", value=dbg.get("sample", ""), height=250)
+else:
+    st.warning("debug_fetch_dividend_html bulunamadı. Bu, data_fetcher.py dosyasının güncel final v3 olmadığını gösterir.")
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        try:
-            spots = fetcher.fetch_all_spot_prices()
-            st.metric("Spot adet", len(spots))
-            sample = {s: spots.get(s) for s in ["AKBNK", "GARAN", "THYAO", TEST_SYMBOL] if spots.get(s) is not None}
-            st.json(sample)
-        except Exception as e:
-            st.error(f"Spot hata: {e}")
-            st.code(traceback.format_exc(), language="text")
-    with col2:
-        try:
-            viops = fetcher.fetch_viop_for_symbol(TEST_SYMBOL)
-            st.metric(f"{TEST_SYMBOL} VİOP adet", len(viops))
-            st.json(dict(list(viops.items())[:10]))
-        except Exception as e:
-            st.error(f"VİOP hata: {e}")
-            st.code(traceback.format_exc(), language="text")
-    with col3:
-        try:
-            divs = div_fetcher.fetch_dividends(TEST_SYMBOL)
-            st.metric(f"{TEST_SYMBOL} temettü adet", len(divs))
-            st.write(divs[:5])
-        except Exception as e:
-            st.error(f"Temettü hata: {e}")
-            st.code(traceback.format_exc(), language="text")
-
-    st.subheader("3) Sonuç yorumu")
-    st.markdown(
-        """
-        - Spot adet 0 ise: spot endpoint veya erişim engeli sorunu var.
-        - Spot dolu, VİOP 0 ise: VİOP endpoint/kod formatı sorunu var.
-        - Status 403/406/429 ise: veri kaynağı Streamlit Cloud IP'sini veya header'ı reddediyor olabilir.
-        - Status 200 ama JSON sample boşsa: endpoint doğru ama parametre veya response alan adları değişmiş olabilir.
-        """
-    )
+st.header("3) Yorum")
+st.info(
+    "AKBNK temettü adet 0 ise ve version VERSION_YOK görünüyorsa, src/data_fetcher.py yanlış dosya veya eski sürümdür. "
+    "Version DIVIDEND_FINAL_2026_04_30_V3 görünüp adet yine 0 ise, ham sayfa örneğinde Temettü Gerçekleşen/Planlanan bölümü gelip gelmediğine bak."
+)
