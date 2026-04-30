@@ -39,6 +39,7 @@ from src.config import (
     DIVIDEND_CACHE_TTL_SEC,
     MONTHS_TR,
     REFRESH_INTERVAL_SEC,
+    SECTOR_MAP,
     SPOT_COMMISSION_RATE,
     VIOP_COMMISSION_RATE,
     days_to_maturity,
@@ -52,7 +53,7 @@ from src.pair_trading import PairTradingConfig, build_pair_detail, scan_pairs
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
-APP_VERSION = "APP_PAIR_TRADING_SCREENER_2026_04_30_V3"
+APP_VERSION = "APP_PAIR_TRADING_SCREENER_SECTOR_UI_FIX_2026_04_30_V4"
 DIVIDEND_CACHE_VERSION = "DIVIDEND_FINAL_2026_04_30_V3"
 
 
@@ -216,6 +217,74 @@ st.markdown(
         background: #dbeafe;
         color: #111827;
     }
+
+    /* Sidebar okunabilirliği */
+    section[data-testid="stSidebar"] {
+        background: #eef2ff !important;
+    }
+    section[data-testid="stSidebar"] * {
+        color: #111827 !important;
+    }
+
+    /* Button / download button */
+    .stButton > button,
+    .stDownloadButton > button {
+        background: #ffffff !important;
+        color: #111827 !important;
+        border: 1px solid #cbd5e1 !important;
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+    }
+    .stButton > button:hover,
+    .stDownloadButton > button:hover {
+        background: #eff6ff !important;
+        border-color: #93c5fd !important;
+        color: #0f172a !important;
+    }
+
+    /* Multi-select tag okunabilirliği */
+    .block-container [data-testid="stMultiSelect"] [data-baseweb="tag"] {
+        background: #dbeafe !important;
+        color: #1e3a8a !important;
+        border-radius: 8px !important;
+    }
+    .block-container [data-testid="stMultiSelect"] [data-baseweb="tag"] * {
+        color: #1e3a8a !important;
+    }
+
+    /* Checkbox / radio / slider label */
+    .block-container [data-testid="stCheckbox"] label,
+    .block-container [data-testid="stRadio"] label,
+    .block-container [data-testid="stSlider"] label,
+    .block-container [data-testid="stMultiSelect"] label {
+        color: #111827 !important;
+        font-weight: 600 !important;
+    }
+
+    /* Expander başlığı */
+    .block-container details summary,
+    .block-container [data-testid="stExpander"] summary {
+        color: #111827 !important;
+        font-weight: 700 !important;
+    }
+
+    /* Info / warning kutuları */
+    .block-container [data-testid="stAlert"] {
+        border-radius: 12px !important;
+    }
+    .block-container [data-testid="stAlert"] * {
+        color: #111827 !important;
+    }
+
+    /* Plotly modebar ve hover okunabilirliği */
+    .js-plotly-plot .plotly .modebar {
+        background: rgba(255,255,255,0.90) !important;
+        border-radius: 8px !important;
+    }
+    .js-plotly-plot .plotly .modebar-btn svg {
+        fill: #334155 !important;
+    }
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -249,6 +318,57 @@ def fmt_price(x: Optional[float]) -> str:
     if x is None or pd.isna(x):
         return "-"
     return f"{x:,.2f}"
+
+
+def sector_of(symbol: str) -> str:
+    """Sembol için sektör etiketi."""
+    return SECTOR_MAP.get(normalize_symbol(symbol), "Diğer")
+
+
+def apply_clean_plotly_theme(fig: go.Figure, title: str, height: int = 360) -> go.Figure:
+    """Plotly grafiklerinde başlık/eksen/hover okunabilirliğini sabitler."""
+    fig.update_layout(
+        title=dict(
+            text=title,
+            x=0.01,
+            xanchor="left",
+            font=dict(size=17, color="#0f172a"),
+        ),
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        height=height,
+        margin=dict(l=44, r=34, t=62, b=42),
+        font=dict(color="#111827", size=12),
+        legend=dict(
+            bgcolor="rgba(255,255,255,0.92)",
+            bordercolor="#e5e7eb",
+            borderwidth=1,
+            font=dict(color="#111827"),
+        ),
+        hoverlabel=dict(
+            bgcolor="#ffffff",
+            font=dict(color="#111827"),
+            bordercolor="#cbd5e1",
+        ),
+    )
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor="#e5e7eb",
+        zeroline=False,
+        linecolor="#94a3b8",
+        tickfont=dict(color="#374151"),
+        title_font=dict(color="#374151"),
+    )
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor="#e5e7eb",
+        zeroline=True,
+        zerolinecolor="#cbd5e1",
+        linecolor="#94a3b8",
+        tickfont=dict(color="#374151"),
+        title_font=dict(color="#374151"),
+    )
+    return fig
 
 
 def get_dividend_for_period(div_data: dict, symbol: str, today: date, expiry: date) -> float:
@@ -1060,15 +1180,42 @@ else:
 
     st.divider()
 
-    default_pair_universe = [x for x in selected_underlyings if x in all_candidate_underlyings]
+    available_sector_values = sorted({sector_of(s) for s in all_candidate_underlyings})
+
+    flt1, flt2, flt3 = st.columns([1.2, 1.0, 1.0])
+    with flt1:
+        selected_sectors = st.multiselect(
+            "Sektör filtresi",
+            options=available_sector_values,
+            default=available_sector_values,
+            help="Önce sektör bazında evreni daraltır."
+        )
+    with flt2:
+        same_sector_only = st.toggle(
+            "Sadece aynı sektör pair'leri",
+            value=True,
+            help="Aynı sektördeki pair'leri önceliklendirir. Bu açıkken AKBNK/GARAN, FROTO/TOASO gibi ekonomik olarak daha anlamlı pair'ler öne çıkar."
+        )
+    with flt3:
+        show_sector_cols = st.toggle(
+            "Tabloda sektör kolonlarını göster",
+            value=True
+        )
+
+    sector_filtered_universe = [
+        s for s in all_candidate_underlyings
+        if sector_of(s) in selected_sectors
+    ]
+
+    default_pair_universe = [x for x in selected_underlyings if x in sector_filtered_universe]
     if len(default_pair_universe) < 2:
-        default_pair_universe = [x for x in DEFAULT_FOCUS if x in all_candidate_underlyings]
+        default_pair_universe = [x for x in DEFAULT_FOCUS if x in sector_filtered_universe]
 
     pair_symbols = st.multiselect(
         "Pair trading evreni",
-        options=all_candidate_underlyings,
+        options=sector_filtered_universe,
         default=default_pair_universe[:40],
-        help="İlk aşamada BIST30/BIST50 benzeri likit bir evren seçmek daha sağlıklı ve hızlıdır."
+        help="İlk aşamada likit ve sektör olarak mantıklı bir evren seçmek daha sağlıklıdır."
     )
 
     max_pairs = st.number_input(
@@ -1119,6 +1266,12 @@ else:
                 with st.spinner("Koentegrasyon, hedge ratio, z-score ve backtest hesaplanıyor..."):
                     result_df = cached_pair_scan(hist_prices, tuple(sorted(valid_symbols)), cfg.to_dict())
 
+                if not result_df.empty:
+                    result_df["sector_a"] = result_df["A"].map(sector_of)
+                    result_df["sector_b"] = result_df["B"].map(sector_of)
+                    result_df["same_sector"] = result_df["sector_a"] == result_df["sector_b"]
+                    result_df["sector_pair"] = result_df["sector_a"] + " / " + result_df["sector_b"]
+
                 if result_df.empty:
                     st.warning(
                         "Filtrelerden geçen pair bulunamadı. Daha geniş evren seçebilir, p-value filtresini gevşetebilir "
@@ -1136,8 +1289,19 @@ else:
                     )
 
                     view_df = result_df.copy()
+
+                    if selected_sectors:
+                        view_df = view_df[
+                            view_df["sector_a"].isin(selected_sectors) &
+                            view_df["sector_b"].isin(selected_sectors)
+                        ]
+
+                    if same_sector_only:
+                        view_df = view_df[view_df["same_sector"]]
+
                     if active_signal_only:
                         view_df = view_df[view_df["signal"] != "Aktif sinyal yok"]
+
                     if require_viop_available:
                         view_df = view_df[view_df["viop_available"]]
 
@@ -1163,6 +1327,16 @@ else:
                             "total_return_pct", "annual_return_pct", "sharpe", "max_drawdown_pct",
                             "trade_count", "win_rate_pct", "avg_holding_days", "viop_available",
                         ]
+
+                        if show_sector_cols:
+                            show_cols = [
+                                "score", "Pair", "sector_a", "sector_b", "same_sector", "signal",
+                                "current_z", "coint_pvalue", "adf_pvalue", "corr_log_price",
+                                "corr_return", "hedge_ratio", "half_life_days", "total_return_pct",
+                                "annual_return_pct", "sharpe", "max_drawdown_pct", "trade_count",
+                                "win_rate_pct", "avg_holding_days", "viop_available",
+                            ]
+
                         st.subheader("Skorlanmış Pair Trading Adayları")
                         display_df(view_df[show_cols].head(100), height=560)
 
@@ -1198,43 +1372,79 @@ else:
 
                             if z_series is not None and not z_series.dropna().empty:
                                 z_fig = go.Figure()
-                                z_fig.add_trace(go.Scatter(x=z_series.index, y=z_series, mode="lines", name="Z-score"))
-                                z_fig.add_hline(y=entry_z, line_dash="dash")
-                                z_fig.add_hline(y=-entry_z, line_dash="dash")
-                                z_fig.add_hline(y=0, line_dash="dot")
-                                z_fig.update_layout(
-                                    title=f"{selected_pair} Rolling Z-Score",
-                                    paper_bgcolor="white",
-                                    plot_bgcolor="white",
-                                    height=360,
-                                    font=dict(color="#111827"),
-                                    margin=dict(l=30, r=30, t=50, b=35),
+                                z_fig.add_trace(
+                                    go.Scatter(
+                                        x=z_series.index,
+                                        y=z_series,
+                                        mode="lines",
+                                        name="Rolling Z-Score",
+                                        line=dict(color="#2563eb", width=2.2),
+                                    )
+                                )
+                                z_fig.add_hline(
+                                    y=entry_z,
+                                    line_dash="dash",
+                                    line_color="#dc2626",
+                                    line_width=1.5,
+                                    annotation_text=f"+{entry_z}",
+                                    annotation_position="top right",
+                                    annotation_font=dict(color="#dc2626"),
+                                )
+                                z_fig.add_hline(
+                                    y=-entry_z,
+                                    line_dash="dash",
+                                    line_color="#dc2626",
+                                    line_width=1.5,
+                                    annotation_text=f"-{entry_z}",
+                                    annotation_position="bottom right",
+                                    annotation_font=dict(color="#dc2626"),
+                                )
+                                z_fig.add_hline(
+                                    y=0,
+                                    line_dash="dot",
+                                    line_color="#475569",
+                                    line_width=1.2,
+                                )
+                                apply_clean_plotly_theme(
+                                    z_fig,
+                                    f"{selected_pair} Rolling Z-Score",
+                                    360
                                 )
                                 st.plotly_chart(z_fig, use_container_width=True)
 
                             if spread_series is not None and not spread_series.dropna().empty:
                                 spread_fig = go.Figure()
-                                spread_fig.add_trace(go.Scatter(x=spread_series.index, y=spread_series, mode="lines", name="Spread"))
-                                spread_fig.update_layout(
-                                    title=f"{selected_pair} Koentegrasyon Spread'i",
-                                    paper_bgcolor="white",
-                                    plot_bgcolor="white",
-                                    height=320,
-                                    font=dict(color="#111827"),
-                                    margin=dict(l=30, r=30, t=50, b=35),
+                                spread_fig.add_trace(
+                                    go.Scatter(
+                                        x=spread_series.index,
+                                        y=spread_series,
+                                        mode="lines",
+                                        name="Spread",
+                                        line=dict(color="#0f766e", width=2.2),
+                                    )
+                                )
+                                apply_clean_plotly_theme(
+                                    spread_fig,
+                                    f"{selected_pair} Koentegrasyon Spread'i",
+                                    320
                                 )
                                 st.plotly_chart(spread_fig, use_container_width=True)
 
                             if equity_curve is not None and not equity_curve.dropna().empty:
                                 eq_fig = go.Figure()
-                                eq_fig.add_trace(go.Scatter(x=equity_curve.index, y=equity_curve, mode="lines", name="Backtest Equity"))
-                                eq_fig.update_layout(
-                                    title=f"{selected_pair} Basit Z-Score Backtest Equity",
-                                    paper_bgcolor="white",
-                                    plot_bgcolor="white",
-                                    height=320,
-                                    font=dict(color="#111827"),
-                                    margin=dict(l=30, r=30, t=50, b=35),
+                                eq_fig.add_trace(
+                                    go.Scatter(
+                                        x=equity_curve.index,
+                                        y=equity_curve,
+                                        mode="lines",
+                                        name="Backtest Equity",
+                                        line=dict(color="#7c3aed", width=2.2),
+                                    )
+                                )
+                                apply_clean_plotly_theme(
+                                    eq_fig,
+                                    f"{selected_pair} Basit Z-Score Backtest Equity",
+                                    320
                                 )
                                 st.plotly_chart(eq_fig, use_container_width=True)
 
