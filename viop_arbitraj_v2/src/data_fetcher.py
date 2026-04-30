@@ -249,30 +249,25 @@ class DataFetcher:
         return self.fetch_all_spot_prices().get(symbol.upper())
 
 
+DIVIDEND_FETCHER_VERSION = "DIVIDEND_FINAL_2026_04_30_V3"
+
+
 class DividendFetcher:
     """
-    İş Yatırım şirket kartındaki "Temettü Gerçekleşen/Planlanan" bölümünü
-    basit ve dayanıklı regex ile parse eder.
+    Temettü kayıtlarını İş Yatırım şirket kartından çeker.
 
-    Ana kaynak:
-      https://www.isyatirim.com.tr/tr-tr/analiz/hisse/Sayfalar/sirket-karti.aspx?hisse=AKBNK
+    Örn. kaynak satır:
+    AKBNK 26.03.2026 3,11 2,2018 220,18 187,15 11.449.360.000 20
 
-    Çekilen alan:
-      Kod Dağ. Tarihi Temettü Verim Hisse Başı TL ...
-      AKBNK 26.03.2026 3,11 2,2018 ...
-
-    amount = Hisse Başı TL
-    rate   = Temettü Verim (%)
+    Parsed:
+    ex_date = 26.03.2026
+    rate    = 3,11
+    amount  = 2,2018  # Hisse Başı TL
     """
 
     COMPANY_CARD_URL = (
         "https://www.isyatirim.com.tr/tr-tr/analiz/hisse/Sayfalar/"
         "sirket-karti.aspx"
-    )
-
-    LEGACY_DIVIDEND_URL = (
-        "https://www.isyatirim.com.tr/tr-tr/analiz/hisse/Sayfalar/"
-        "sermaye-artirimlari-ve-temettuler.aspx"
     )
 
     def __init__(self, timeout: int = 20):
@@ -281,213 +276,138 @@ class DividendFetcher:
         self.timeout = timeout
 
     def fetch_dividends(self, symbol: str) -> list:
+        from datetime import datetime as dt
+
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return []
 
-        urls = [
-            self.COMPANY_CARD_URL,
-            self.LEGACY_DIVIDEND_URL,
+        try:
+            r = self.session.get(
+                self.COMPANY_CARD_URL,
+                params={"hisse": symbol},
+                timeout=self.timeout,
+            )
+        except Exception as e:
+            log.warning("Dividend request failed for %s: %s", symbol, e)
+            return []
+
+        if r.status_code != 200:
+            log.warning("Dividend HTTP %s for %s", r.status_code, symbol)
+            return []
+
+        text = _clean_text(r.text)
+
+        # Bölümü ayırmaya çalış. Ayıramazsa tüm text üzerinden arar.
+        low = text.lower()
+        marker_positions = [
+            low.find("temettü gerçekleşen/planlanan"),
+            low.find("temettu gerceklesen/planlanan"),
+            low.find("temettü gerçekleşen"),
+            low.find("temettu gerceklesen"),
         ]
+        valid_positions = [p for p in marker_positions if p >= 0]
+        if valid_positions:
+            text = text[min(valid_positions):]
 
-        for url in urls:
+        # Türkçe sayı: 3,11 | 2,2018 | 220,18 | 11.449.360.000 | 65,00
+        num = r"-?\d+(?:\.\d{3})*(?:,\d+)?|-?\d+(?:,\d+)?"
+
+        # En dayanıklı pattern:
+        # SYMBOL DATE RATE AMOUNT ...
+        pattern = re.compile(
+            rf"\b{re.escape(symbol)}\b\s+"
+            rf"(\d{{2}}[./]\d{{2}}[./]\d{{4}})\s+"
+            rf"({num})\s+"
+            rf"({num})",
+            flags=re.IGNORECASE,
+        )
+
+        rows = []
+        for m in pattern.finditer(text):
+            date_str = m.group(1).replace("/", ".")
+            rate_raw = m.group(2)
+            amount_raw = m.group(3)
+
             try:
-                r = self.session.get(url, params={"hisse": symbol}, timeout=self.timeout)
-                if r.status_code != 200:
-                    log.warning("Dividend HTTP %s for %s from %s", r.status_code, symbol, url)
-                    continue
+                ex_date = dt.strptime(date_str, "%d.%m.%Y").date()
+            except Exception:
+                continue
 
-                rows = self._parse_dividends_from_html(r.text, symbol)
-                if rows:
-                    return rows
+            rate = _parse_tr_number(rate_raw) or 0.0
+            amount = _parse_tr_number(amount_raw)
 
-            except Exception as e:
-                log.warning("Dividend fetch failed for %s from %s: %s", symbol, url, e)
+            # Hisse başı temettü için geniş ama mantıklı filtre.
+            # 11.449.360.000 gibi toplam temettüleri yakalamamak için üst sınır koyuyoruz.
+            if amount is None or amount <= 0 or amount > 10000:
+                continue
 
-        return []
+            rows.append({
+                "ex_date": ex_date,
+                "amount": float(amount),
+                "rate": float(rate),
+            })
+
+        # Duplicate temizle: İş Yatırım sayfası bazen aynı tabloyu iki kez basabiliyor.
+        unique = {}
+        for row in rows:
+            key = (row["ex_date"], round(row["amount"], 6))
+            unique[key] = row
+
+        return sorted(unique.values(), key=lambda x: x["ex_date"], reverse=True)
 
     def fetch_dividends_bulk(self, symbols: list) -> dict:
         from concurrent.futures import ThreadPoolExecutor
 
-        clean_symbols = []
+        clean = []
         for s in symbols or []:
             s = str(s or "").strip().upper()
-            if s and s not in clean_symbols:
-                clean_symbols.append(s)
+            if s and s not in clean:
+                clean.append(s)
 
-        def _one(sym: str):
+        def _one(sym):
             return sym, self.fetch_dividends(sym)
 
         out = {}
-        # Fazla paralellik İş Yatırım tarafında blok riskini artırır.
+        # Az paralellik: blok riskini azaltır.
         with ThreadPoolExecutor(max_workers=4) as ex:
-            for sym, rows in ex.map(_one, clean_symbols):
+            for sym, rows in ex.map(_one, clean):
                 out[sym] = rows
         return out
 
-    @staticmethod
-    def _dedupe_sort(rows: list) -> list:
-        uniq = {}
-        for r in rows:
-            ex = r.get("ex_date")
-            amount = r.get("amount")
-            if not ex or amount is None:
-                continue
-            try:
-                amount = float(amount)
-            except Exception:
-                continue
-            if amount <= 0:
-                continue
-
-            key = (ex, round(amount, 6))
-            uniq[key] = {
-                "ex_date": ex,
-                "amount": amount,
-                "rate": float(r.get("rate") or 0.0),
-            }
-
-        return sorted(uniq.values(), key=lambda x: x["ex_date"])
-
-    @staticmethod
-    def _parse_dividends_from_html(html: str, symbol: str) -> list:
-        from datetime import datetime as dt
-
+    def debug_fetch_dividend_html(self, symbol: str = "AKBNK") -> dict:
+        """
+        Sadece teşhis sayfası için. App ana akışı bunu kullanmaz.
+        """
         symbol = str(symbol or "").strip().upper()
-        rows = []
-
-        text = _clean_text(html)
-
-        # Sadece ilgili bölüme odaklan. Bulamazsa tüm text üzerinde devam eder.
-        lowered = text.lower()
-        start_candidates = [
-            lowered.find("temettü gerçekleşen/planlanan"),
-            lowered.find("temettu gerceklesen/planlanan"),
-            lowered.find("temettü gerçekleşen"),
-            lowered.find("temettu gerceklesen"),
-        ]
-        starts = [i for i in start_candidates if i >= 0]
-        if starts:
-            start = min(starts)
-            block = text[start:]
-        else:
-            block = text
-
-        # İş Yatırım sayfasındaki ana format:
-        # AKBNK 26.03.2026 3,11 2,2018 220,18 187,15 11.449.360.000 20
-        tr_num = r"(?:-?\d{1,3}(?:\.\d{3})*,\d{1,6}|-?\d+,\d{1,6}|-?\d+\.\d{1,6}|-?\d+)"
-        direct_pattern = re.compile(
-            rf"\b{re.escape(symbol)}\b\s+"
-            rf"(\d{{2}}[./]\d{{2}}[./]\d{{4}})\s+"
-            rf"({tr_num})\s+"
-            rf"({tr_num})",
-            flags=re.I,
-        )
-
-        for m in direct_pattern.finditer(block):
-            date_s = m.group(1).replace("/", ".")
-            rate_s = m.group(2)
-            amount_s = m.group(3)
-
-            try:
-                ex_date = dt.strptime(date_s, "%d.%m.%Y").date()
-            except Exception:
-                continue
-
-            rate = _parse_tr_number(rate_s) or 0.0
-            amount = _parse_tr_number(amount_s)
-
-            # Hisse başı temettü makul aralıkta olmalı. 0-10.000 TL aralığı yeterince geniş.
-            if amount and 0 < amount < 10000:
-                rows.append({
-                    "ex_date": ex_date,
-                    "amount": amount,
-                    "rate": rate,
-                })
-
-        if rows:
-            return DividendFetcher._dedupe_sort(rows)
-
-        # Fallback 1: tablo parse. HTML yapısı değişirse işe yarar.
         try:
-            tables = pd.read_html(StringIO(html), decimal=",", thousands=".")
-        except Exception:
-            tables = []
-
-        for df in tables:
-            df = df.copy()
-            df.columns = [
-                " ".join([str(x) for x in c if str(x) != "nan"]).strip()
-                if isinstance(c, tuple) else str(c).strip()
-                for c in df.columns
-            ]
-
-            cols = list(df.columns)
-            low_join = " ".join(c.lower() for c in cols)
-
-            if not any(k in low_join for k in ["temett", "hisse baş", "hisse basi", "dağ", "dag"]):
-                continue
-
-            symbol_col = next((c for c in cols if c.lower() in {"kod", "sembol", "hisse"} or "kod" in c.lower()), None)
-            date_col = next((c for c in cols if any(k in c.lower() for k in ["tarih", "dağ", "dag"])), None)
-            amount_col = next((c for c in cols if "hisse" in c.lower() and ("tl" in c.lower() or "baş" in c.lower() or "basi" in c.lower())), None)
-            rate_col = next((c for c in cols if "verim" in c.lower()), None)
-
-            if not date_col or not amount_col:
-                continue
-
-            for _, row in df.iterrows():
-                if symbol_col:
-                    raw_symbol = str(row.get(symbol_col, "")).strip().upper()
-                    if symbol not in raw_symbol:
-                        continue
-
-                date_raw = str(row.get(date_col, ""))
-                dm = re.search(r"(\d{2})[./](\d{2})[./](\d{4})", date_raw)
-                if not dm:
-                    continue
-
-                try:
-                    d, m, y = map(int, dm.groups())
-                    ex_date = dt(y, m, d).date()
-                except Exception:
-                    continue
-
-                amount = _parse_tr_number(row.get(amount_col))
-                rate = _parse_tr_number(row.get(rate_col)) if rate_col else 0.0
-
-                if amount and 0 < amount < 10000:
-                    rows.append({
-                        "ex_date": ex_date,
-                        "amount": amount,
-                        "rate": rate or 0.0,
-                    })
-
-        if rows:
-            return DividendFetcher._dedupe_sort(rows)
-
-        # Fallback 2: satır satır tarama.
-        for line in re.split(r"(?=\b[A-Z]{3,6}\b\s+\d{2}[./]\d{2}[./]\d{4})", block):
-            if not re.search(rf"\b{re.escape(symbol)}\b", line):
-                continue
-            m = direct_pattern.search(line)
-            if not m:
-                continue
-
-            try:
-                ex_date = dt.strptime(m.group(1).replace("/", "."), "%d.%m.%Y").date()
-            except Exception:
-                continue
-
-            amount = _parse_tr_number(m.group(3))
-            rate = _parse_tr_number(m.group(2)) or 0.0
-
-            if amount and 0 < amount < 10000:
-                rows.append({
-                    "ex_date": ex_date,
-                    "amount": amount,
-                    "rate": rate,
-                })
-
-        return DividendFetcher._dedupe_sort(rows)
+            r = self.session.get(
+                self.COMPANY_CARD_URL,
+                params={"hisse": symbol},
+                timeout=self.timeout,
+            )
+            text = _clean_text(r.text)
+            low = text.lower()
+            contains_marker = ("temettü gerçekleşen" in low) or ("temettu gerceklesen" in low)
+            contains_symbol = symbol.lower() in low
+            sample = ""
+            idx = low.find("temettü gerçekleşen")
+            if idx < 0:
+                idx = low.find(symbol.lower())
+            if idx >= 0:
+                sample = text[max(0, idx - 250): idx + 1200]
+            return {
+                "version": DIVIDEND_FETCHER_VERSION,
+                "status_code": r.status_code,
+                "url": r.url,
+                "contains_marker": contains_marker,
+                "contains_symbol": contains_symbol,
+                "parsed_rows": self.fetch_dividends(symbol),
+                "sample": sample,
+            }
+        except Exception as e:
+            return {
+                "version": DIVIDEND_FETCHER_VERSION,
+                "error": str(e),
+            }
 
