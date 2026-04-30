@@ -301,10 +301,8 @@ def render_right_panel(results_by_period: dict, contract_months: list):
 def main():
     # Otomatik yenileme
     st_autorefresh = st.empty()
-    st.markdown(
-        f"<meta http-equiv='refresh' content='{REFRESH_INTERVAL_SEC}'>",
-        unsafe_allow_html=True,
-    )
+   from streamlit_autorefresh import st_autorefresh
+st_autorefresh(interval=REFRESH_INTERVAL_SEC * 1000, key="data_refresh")
 
     # Bugünün tarihi (İstanbul TZ)
     tz = pytz.timezone("Europe/Istanbul")
