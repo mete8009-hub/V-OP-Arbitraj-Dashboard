@@ -302,7 +302,7 @@ def main():
     # Otomatik yenileme
     st_autorefresh = st.empty()
    from streamlit_autorefresh import st_autorefresh
-st_autorefresh(interval=REFRESH_INTERVAL_SEC * 1000, key="data_refresh")
+   st_autorefresh(interval=REFRESH_INTERVAL_SEC * 1000, key="data_refresh")
 
     # Bugünün tarihi (İstanbul TZ)
     tz = pytz.timezone("Europe/Istanbul")
