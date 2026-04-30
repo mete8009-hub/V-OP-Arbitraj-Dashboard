@@ -86,109 +86,78 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-    .stApp {
-        background: #f6f8fb;
-        color: #111827;
+    /* Main canvas: force a clean light workspace even if the browser/app theme is dark */
+    [data-testid="stAppViewContainer"] {
+        background: #f5f7fb !important;
+    }
+    [data-testid="stMain"] {
+        background: #f5f7fb !important;
     }
     .block-container {
         padding-top: 1.1rem;
         padding-bottom: 2rem;
-        max-width: 1500px;
+        max-width: 1520px;
+        color: #111827 !important;
     }
-    [data-testid="stHeader"] { background: transparent; }
 
-    .app-title {
-        font-size: 28px;
-        font-weight: 800;
+    /* Keep all main-area native text readable on the light background */
+    .block-container h1,
+    .block-container h2,
+    .block-container h3,
+    .block-container h4,
+    .block-container h5,
+    .block-container h6,
+    .block-container p,
+    .block-container label,
+    .block-container span,
+    .block-container div {
         color: #111827;
-        margin: 0 0 4px 0;
     }
-    .app-subtitle {
-        font-size: 13px;
-        color: #6b7280;
-        margin-bottom: 16px;
+
+    [data-testid="stHeader"] {
+        background: transparent !important;
     }
-    .soft-card {
-        background: white;
-        border: 1px solid #e5e7eb;
-        border-radius: 14px;
-        padding: 14px 16px;
-        box-shadow: 0 1px 4px rgba(15, 23, 42, 0.05);
-        margin-bottom: 12px;
+
+    /* Native metric cards */
+    .block-container div[data-testid="stMetric"] {
+        background: #ffffff !important;
+        border: 1px solid #e5e7eb !important;
+        border-radius: 14px !important;
+        padding: 14px 16px !important;
+        box-shadow: 0 1px 4px rgba(15, 23, 42, 0.06) !important;
     }
-    .metric-card {
-        background: white;
-        border: 1px solid #e5e7eb;
-        border-radius: 14px;
-        padding: 13px 15px;
-        box-shadow: 0 1px 4px rgba(15, 23, 42, 0.05);
-        min-height: 88px;
+    .block-container div[data-testid="stMetric"] label,
+    .block-container div[data-testid="stMetric"] [data-testid="stMetricLabel"] {
+        color: #6b7280 !important;
+        font-size: 12px !important;
     }
-    .metric-label {
-        font-size: 12px;
-        color: #6b7280;
-        margin-bottom: 6px;
+    .block-container div[data-testid="stMetricValue"] {
+        color: #111827 !important;
+        font-weight: 800 !important;
     }
-    .metric-value {
-        font-size: 23px;
-        font-weight: 800;
+    .block-container div[data-testid="stMetricDelta"] {
+        color: #047857 !important;
+    }
+
+    /* Tabs and dataframe readability */
+    .block-container button[role="tab"] {
+        color: #111827 !important;
+        font-weight: 650 !important;
+    }
+    .block-container div[data-testid="stDataFrame"] {
+        background: #ffffff !important;
+        border-radius: 12px !important;
+    }
+
+    /* Info boxes should stay readable */
+    .block-container [data-testid="stAlert"] * {
+        color: #111827 !important;
+    }
+
+    /* Selection color: prevents the aggressive blue block look when text is accidentally selected */
+    ::selection {
+        background: #dbeafe;
         color: #111827;
-        line-height: 1.15;
-    }
-    .metric-note {
-        font-size: 11px;
-        color: #6b7280;
-        margin-top: 5px;
-    }
-    .section-title {
-        font-size: 19px;
-        font-weight: 800;
-        color: #111827;
-        margin: 8px 0 10px 0;
-    }
-    .pill-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin-bottom: 14px;
-    }
-    .pill {
-        background: white;
-        border: 1px solid #e5e7eb;
-        border-radius: 999px;
-        padding: 7px 11px;
-        font-size: 12px;
-        color: #374151;
-        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
-    }
-    .warn-box {
-        background: #fff7ed;
-        border: 1px solid #fed7aa;
-        border-radius: 12px;
-        padding: 11px 13px;
-        font-size: 13px;
-        color: #7c2d12;
-        margin: 8px 0 14px 0;
-    }
-    .ok-box {
-        background: #f0fdf4;
-        border: 1px solid #bbf7d0;
-        border-radius: 12px;
-        padding: 11px 13px;
-        font-size: 13px;
-        color: #14532d;
-        margin: 8px 0 14px 0;
-    }
-    .small-muted {
-        font-size: 12px;
-        color: #6b7280;
-    }
-    div[data-testid="stMetric"] {
-        background: white;
-        border: 1px solid #e5e7eb;
-        border-radius: 14px;
-        padding: 12px 14px;
-        box-shadow: 0 1px 4px rgba(15, 23, 42, 0.05);
     }
 </style>
 """,
@@ -476,10 +445,11 @@ def render_top_bar_chart(
     if df.empty or value_col not in df.columns:
         fig = go.Figure()
         fig.update_layout(
-            title=title,
+            title=dict(text=title, font=dict(color="#111827")),
             height=360,
             paper_bgcolor="white",
             plot_bgcolor="white",
+            font=dict(color="#111827"),
             annotations=[
                 dict(
                     text="Gösterilecek veri yok",
@@ -498,7 +468,7 @@ def render_top_bar_chart(
     work = work.sort_values(value_col, ascending=False).head(top_n)
     work = work.iloc[::-1]
 
-    colors = ["#059669" if v >= 0 else "#dc2626" for v in work[value_col]]
+    colors = ["#047857" if v >= 0 else "#b91c1c" for v in work[value_col]]
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
@@ -531,45 +501,47 @@ def render_top_bar_chart(
         paper_bgcolor="white",
         plot_bgcolor="white",
         font=dict(color="#111827", size=12),
+        title_font=dict(color="#111827", size=16),
         xaxis=dict(
             title="Yıllıklandırılmış Getiri (%)",
+            title_font=dict(color="#374151"),
+            tickfont=dict(color="#374151"),
             showgrid=True,
             gridcolor="#e5e7eb",
             zeroline=True,
             zerolinecolor="#9ca3af",
         ),
-        yaxis=dict(title="", automargin=True),
+        yaxis=dict(title="", automargin=True, tickfont=dict(color="#374151", size=12)),
     )
     return fig
 
 
 def render_metric_card(label: str, value: str, note: str = "") -> None:
-    st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-label">{label}</div>
-            <div class="metric-value">{value}</div>
-            <div class="metric-note">{note}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    """Metric card rendered with native Streamlit components to avoid theme/color conflicts."""
+    st.metric(label, value)
+    if note:
+        st.caption(note)
 
 
 def render_header_pills(today: date, contract_months: List[Tuple[int, int]], selected_count: int) -> None:
-    pills = [
-        f"<span class='pill'><b>Bugün</b>: {today.strftime('%d.%m.%Y')}</span>",
-        f"<span class='pill'><b>T+2</b>: {(today + timedelta(days=2)).strftime('%d.%m.%Y')}</span>",
-        f"<span class='pill'><b>Dayanak</b>: {selected_count}</span>",
+    """Compact top status row rendered with native Streamlit metrics."""
+    items = [
+        ("Bugün", today.strftime("%d.%m.%Y")),
+        ("T+2", (today + timedelta(days=2)).strftime("%d.%m.%Y")),
+        ("Dayanak", str(selected_count)),
     ]
     for month, year in contract_months:
         expiry = ALL_EXPIRIES.get((month, year))
         if expiry:
-            pills.append(
-                f"<span class='pill'><b>{MONTHS_TR[month - 1]} {year}</b>: "
-                f"{expiry.strftime('%d.%m.%Y')} | DTM {max(days_to_maturity(today, expiry), 0)}</span>"
-            )
-    st.markdown("<div class='pill-row'>" + "".join(pills) + "</div>", unsafe_allow_html=True)
+            items.append((
+                f"{MONTHS_TR[month - 1]} {year}",
+                f"{expiry.strftime('%d.%m.%Y')} | DTM {max(days_to_maturity(today, expiry), 0)}",
+            ))
+
+    cols = st.columns(len(items))
+    for col, (label, value) in zip(cols, items):
+        with col:
+            st.metric(label, value)
 
 
 def display_df(df: pd.DataFrame, height: int = 420) -> None:
@@ -662,11 +634,10 @@ viop_options = sorted(set(viops.keys()) | set(viop_contract_options))
 # -----------------------------------------------------------------------------
 # Başlık
 # -----------------------------------------------------------------------------
-st.markdown("<div class='app-title'>VİOP / Spot Pair Arbitraj Dashboard</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='app-subtitle'>Spot hisse, vadeli pay kontratı ve özel pair/spread analizleri. "
-    "Aynı dayanak dışındaki eşleşmeler klasik arbitraj değil, relative-value analizidir.</div>",
-    unsafe_allow_html=True,
+st.title("VİOP / Spot Pair Arbitraj Dashboard")
+st.caption(
+    "Spot hisse, vadeli pay kontratı ve özel pair/spread analizleri. "
+    "Aynı dayanak dışındaki eşleşmeler klasik arbitraj değil, relative-value analizidir."
 )
 
 render_header_pills(today, contract_months, len(selected_underlyings))
@@ -691,11 +662,10 @@ if len(spots) == 0 or len(viops) == 0:
 # Mod 1: Aynı dayanak taraması
 # -----------------------------------------------------------------------------
 if mode == "Aynı Dayanak Taraması":
-    st.markdown("<div class='section-title'>Aynı Dayanak Spot ↔ VİOP Taraması</div>", unsafe_allow_html=True)
-    st.markdown(
-        "<div class='ok-box'>Bu mod klasik tarama modudur: her satırda <b>spot hisse alınır</b>, "
-        "aynı dayanağın ilgili <b>VİOP kontratı satılır</b>. Örn: AKBNK Spot ↔ F_AKBNK0526.</div>",
-        unsafe_allow_html=True,
+    st.subheader("Aynı Dayanak Spot ↔ VİOP Taraması")
+    st.info(
+        "Bu mod klasik tarama modudur: her satırda spot hisse alınır, "
+        "aynı dayanağın ilgili VİOP kontratı satılır. Örn: AKBNK Spot ↔ F_AKBNK0526."
     )
 
     scan_df = build_same_underlying_df(
@@ -748,7 +718,7 @@ if mode == "Aynı Dayanak Taraması":
                     st.plotly_chart(fig, use_container_width=True)
 
                 with right:
-                    st.markdown("<div class='section-title'>Top Pair Tablosu</div>", unsafe_allow_html=True)
+                    st.subheader("Top Pair Tablosu")
                     cols = [
                         "Spot Hisse", "VİOP Kontrat", "Spot Fiyat", "VİOP Fiyat",
                         "Temettü", "Spread %", "Yıllık Getiri %", "DTM",
@@ -756,7 +726,7 @@ if mode == "Aynı Dayanak Taraması":
                     display_df(vade_df[cols].head(top_n), height=430)
 
         with tabs[-1]:
-            st.markdown("<div class='section-title'>Tüm Hesaplanabilir Pairler</div>", unsafe_allow_html=True)
+            st.subheader("Tüm Hesaplanabilir Pairler")
             display_cols = [
                 "Pair", "Vade", "Spot Fiyat", "VİOP Fiyat", "Temettü", "Spread TL",
                 "Spread %", "Yıllık Getiri %", "DTM", "İşlem Mantığı",
@@ -774,12 +744,11 @@ if mode == "Aynı Dayanak Taraması":
 # Mod 2: Özel pair analizi
 # -----------------------------------------------------------------------------
 else:
-    st.markdown("<div class='section-title'>Özel Pair Analizi</div>", unsafe_allow_html=True)
-    st.markdown(
-        "<div class='warn-box'><b>Önemli:</b> AKBNK Spot ↔ F_AKBNK0526 aynı dayanak olduğu için klasik spot-vadeli arbitrajdır. "
+    st.subheader("Özel Pair Analizi")
+    st.warning(
+        "Önemli: AKBNK Spot ↔ F_AKBNK0526 aynı dayanak olduğu için klasik spot-vadeli arbitrajdır. "
         "THYAO Spot ↔ F_PGSUS0526, Spot ↔ Spot veya VİOP ↔ VİOP eşleşmeleri ise fiyat/spread karşılaştırmasıdır; "
-        "bunları risksiz arbitraj gibi yorumlama.</div>",
-        unsafe_allow_html=True,
+        "bunları risksiz arbitraj gibi yorumlama."
     )
 
     left_cfg, right_cfg = st.columns(2, gap="large")
@@ -883,21 +852,19 @@ else:
             st.metric("Klasik arbitraj mı?", result["Klasik Spot-VİOP Arbitraj mı?"])
 
         if result["Klasik Spot-VİOP Arbitraj mı?"] == "Hayır":
-            st.markdown(
-                "<div class='warn-box'>Bu eşleşme aynı dayanaklı Spot/VİOP arbitrajı değil. "
-                "Sonucu <b>relative-value / spread</b> göstergesi olarak oku.</div>",
-                unsafe_allow_html=True,
+            st.warning(
+                "Bu eşleşme aynı dayanaklı Spot/VİOP arbitrajı değil. "
+                "Sonucu relative-value / spread göstergesi olarak oku."
             )
         else:
-            st.markdown(
-                "<div class='ok-box'>Bu eşleşme aynı dayanaklı Spot/VİOP yapısıdır. "
-                "Temettü ve komisyon varsayımlarıyla yıllıklandırılmış taşıma/spread hesaplanmıştır.</div>",
-                unsafe_allow_html=True,
+            st.success(
+                "Bu eşleşme aynı dayanaklı Spot/VİOP yapısıdır. "
+                "Temettü ve komisyon varsayımlarıyla yıllıklandırılmış taşıma/spread hesaplanmıştır."
             )
 
         # Detay tablo
         detail_df = pd.DataFrame([result])
-        st.markdown("<div class='section-title'>Pair Detayı</div>", unsafe_allow_html=True)
+        st.subheader("Pair Detayı")
         display_df(detail_df, height=120)
 
         # Bacak fiyat tablosu
@@ -923,7 +890,7 @@ else:
                 },
             ]
         )
-        st.markdown("<div class='section-title'>Bacaklar</div>", unsafe_allow_html=True)
+        st.subheader("Bacaklar")
         display_df(leg_df, height=120)
 
         # Basit waterfall benzeri grafik
@@ -937,7 +904,7 @@ else:
                     result["Dividend Adj."],
                     result["Spread TL"],
                 ],
-                marker_color=["#dc2626", "#059669", "#2563eb", "#111827"],
+                marker_color=["#b91c1c", "#047857", "#2563eb", "#374151"],
                 text=[
                     f"-{float(long_price) * (1 + effective_commission(long_type)):.2f}",
                     f"{float(short_price) * (1 - effective_commission(short_type)):.2f}",
@@ -955,16 +922,16 @@ else:
             margin=dict(l=30, r=30, t=60, b=40),
             yaxis=dict(showgrid=True, gridcolor="#e5e7eb", zeroline=True, zerolinecolor="#9ca3af"),
             font=dict(color="#111827"),
+            xaxis=dict(tickfont=dict(color="#374151")),
         )
         st.plotly_chart(spread_fig, use_container_width=True)
 
 # -----------------------------------------------------------------------------
 # Alt bilgi
 # -----------------------------------------------------------------------------
-st.markdown(
-    "<div class='small-muted'>Varsayımlar: Spot komisyon = "
-    f"{SPOT_COMMISSION_RATE:.4%}, VİOP komisyon = {VIOP_COMMISSION_RATE:.4%}. "
+st.caption(
+    f"Varsayımlar: Spot komisyon = {SPOT_COMMISSION_RATE:.4%}, "
+    f"VİOP komisyon = {VIOP_COMMISSION_RATE:.4%}. "
     "Veri kaynağı public web verisi olduğu için gecikme/eksik kontrat riski olabilir. "
-    "Üretim kullanımında kurum içi lisanslı veri servisi tercih edilmelidir.</div>",
-    unsafe_allow_html=True,
+    "Üretim kullanımında kurum içi lisanslı veri servisi tercih edilmelidir."
 )
