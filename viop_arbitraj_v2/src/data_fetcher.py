@@ -251,16 +251,18 @@ class DataFetcher:
 
 class DividendFetcher:
     """
-    İş Yatırım şirket kartındaki "Temettü Gerçekleşen/Planlanan" bölümünden
-    hisse başı brüt temettü tutarını çeker.
+    İş Yatırım şirket kartındaki "Temettü Gerçekleşen/Planlanan" bölümünü
+    basit ve dayanıklı regex ile parse eder.
 
-    Önemli düzeltme:
-    Önceki sürüm yanlış sayfaya gidiyordu:
-        sermaye-artirimlari-ve-temettuler.aspx?hisse=AKBNK
-    Bu sayfa çoğu sembolde tabloyu HTML içinde vermediği için 0 kayıt dönüyordu.
+    Ana kaynak:
+      https://www.isyatirim.com.tr/tr-tr/analiz/hisse/Sayfalar/sirket-karti.aspx?hisse=AKBNK
 
-    Bu sürüm doğru sayfayı kullanır:
-        sirket-karti.aspx?hisse=AKBNK
+    Çekilen alan:
+      Kod Dağ. Tarihi Temettü Verim Hisse Başı TL ...
+      AKBNK 26.03.2026 3,11 2,2018 ...
+
+    amount = Hisse Başı TL
+    rate   = Temettü Verim (%)
     """
 
     COMPANY_CARD_URL = (
@@ -279,49 +281,28 @@ class DividendFetcher:
         self.timeout = timeout
 
     def fetch_dividends(self, symbol: str) -> list:
-        """
-        Tek hisse için geçmiş + planlanan temettüleri döndürür.
-
-        Returns:
-            [
-                {"ex_date": date(2026, 3, 26), "amount": 2.2018, "rate": 3.11},
-                ...
-            ]
-
-        amount = Hisse Başı Brüt TL.
-        rate   = Temettü verimi (%), varsa.
-        """
-        symbol = str(symbol).strip().upper()
+        symbol = str(symbol or "").strip().upper()
         if not symbol:
             return []
 
-        # 1) Doğru kaynak: şirket kartı.
-        try:
-            r = self.session.get(
-                self.COMPANY_CARD_URL,
-                params={"hisse": symbol},
-                timeout=self.timeout,
-            )
-            if r.status_code == 200:
-                rows = self._parse_company_card_dividends(r.text, symbol)
-                if rows:
-                    return rows
-        except Exception as e:
-            log.warning(f"Dividend company-card fetch {symbol}: {e}")
+        urls = [
+            self.COMPANY_CARD_URL,
+            self.LEGACY_DIVIDEND_URL,
+        ]
 
-        # 2) Fallback: eski sayfa. Bazı sembollerde hâlâ tablo döndürebilir.
-        try:
-            r = self.session.get(
-                self.LEGACY_DIVIDEND_URL,
-                params={"hisse": symbol},
-                timeout=self.timeout,
-            )
-            if r.status_code == 200:
-                rows = self._parse_generic_dividend_tables(r.text, symbol)
+        for url in urls:
+            try:
+                r = self.session.get(url, params={"hisse": symbol}, timeout=self.timeout)
+                if r.status_code != 200:
+                    log.warning("Dividend HTTP %s for %s from %s", r.status_code, symbol, url)
+                    continue
+
+                rows = self._parse_dividends_from_html(r.text, symbol)
                 if rows:
                     return rows
-        except Exception as e:
-            log.warning(f"Dividend legacy fetch {symbol}: {e}")
+
+            except Exception as e:
+                log.warning("Dividend fetch failed for %s from %s: %s", symbol, url, e)
 
         return []
 
@@ -330,7 +311,7 @@ class DividendFetcher:
 
         clean_symbols = []
         for s in symbols or []:
-            s = str(s).strip().upper()
+            s = str(s or "").strip().upper()
             if s and s not in clean_symbols:
                 clean_symbols.append(s)
 
@@ -338,8 +319,8 @@ class DividendFetcher:
             return sym, self.fetch_dividends(sym)
 
         out = {}
-        # Temettü sayfaları ağır olabilir; çok agresif paralellik siteyi bloklatabilir.
-        with ThreadPoolExecutor(max_workers=6) as ex:
+        # Fazla paralellik İş Yatırım tarafında blok riskini artırır.
+        with ThreadPoolExecutor(max_workers=4) as ex:
             for sym, rows in ex.map(_one, clean_symbols):
                 out[sym] = rows
         return out
@@ -349,177 +330,164 @@ class DividendFetcher:
         uniq = {}
         for r in rows:
             ex = r.get("ex_date")
-            amt = r.get("amount")
-            if not ex or amt is None:
+            amount = r.get("amount")
+            if not ex or amount is None:
                 continue
             try:
-                amt = float(amt)
+                amount = float(amount)
             except Exception:
                 continue
-            if amt <= 0:
+            if amount <= 0:
                 continue
-            key = (ex, round(amt, 6))
+
+            key = (ex, round(amount, 6))
             uniq[key] = {
                 "ex_date": ex,
-                "amount": amt,
+                "amount": amount,
                 "rate": float(r.get("rate") or 0.0),
             }
-        return sorted(uniq.values(), key=lambda x: x["ex_date"], reverse=False)
+
+        return sorted(uniq.values(), key=lambda x: x["ex_date"])
 
     @staticmethod
-    def _extract_dividend_block(text: str) -> str:
-        """Sadece gerçekleşen/planlanan temettü bölümünü izole eder."""
-        start_patterns = [
-            "Temettü Gerçekleşen/Planlanan",
-            "Temettu Gerceklesen/Planlanan",
-            "Temettü Gerçekleşen",
-            "Temettu Gerceklesen",
-        ]
-        end_patterns = [
-            "Mali Tablolar",
-            "Finansal Oranlar",
-            "Sermaye Artırımları",
-        ]
-
-        start_idx = -1
-        for pat in start_patterns:
-            idx = text.lower().find(pat.lower())
-            if idx >= 0:
-                start_idx = idx
-                break
-        if start_idx < 0:
-            return text
-
-        end_idx = len(text)
-        lowered = text.lower()
-        for pat in end_patterns:
-            idx = lowered.find(pat.lower(), start_idx + 20)
-            if idx >= 0:
-                end_idx = min(end_idx, idx)
-        return text[start_idx:end_idx]
-
-    @staticmethod
-    def _parse_company_card_dividends(html: str, symbol: str) -> list:
-        """
-        İş Yatırım şirket kartındaki şu yapıyı yakalar:
-
-        Kod Dağ. Tarihi Temettü Verim Hisse Başı TL ...
-        AKBNK 26.03.2026 3,11 2,2018 220,18 187,15 11.449.360.000 20
-
-        Burada kullanılacak ana veri: Hisse Başı TL = tarih sonrası ikinci sayı.
-        """
+    def _parse_dividends_from_html(html: str, symbol: str) -> list:
         from datetime import datetime as dt
 
-        symbol = symbol.upper()
-        text = _clean_text(html)
-        block = DividendFetcher._extract_dividend_block(text)
-
+        symbol = str(symbol or "").strip().upper()
         rows = []
 
-        # En güvenilir kaynak: blok içindeki düz satır pattern'i.
-        # date + yield + hisse başı brüt TL + brüt oran + net oran + toplam + dağıtma oranı
-        pattern = re.compile(
+        text = _clean_text(html)
+
+        # Sadece ilgili bölüme odaklan. Bulamazsa tüm text üzerinde devam eder.
+        lowered = text.lower()
+        start_candidates = [
+            lowered.find("temettü gerçekleşen/planlanan"),
+            lowered.find("temettu gerceklesen/planlanan"),
+            lowered.find("temettü gerçekleşen"),
+            lowered.find("temettu gerceklesen"),
+        ]
+        starts = [i for i in start_candidates if i >= 0]
+        if starts:
+            start = min(starts)
+            block = text[start:]
+        else:
+            block = text
+
+        # İş Yatırım sayfasındaki ana format:
+        # AKBNK 26.03.2026 3,11 2,2018 220,18 187,15 11.449.360.000 20
+        tr_num = r"(?:-?\d{1,3}(?:\.\d{3})*,\d{1,6}|-?\d+,\d{1,6}|-?\d+\.\d{1,6}|-?\d+)"
+        direct_pattern = re.compile(
             rf"\b{re.escape(symbol)}\b\s+"
-            r"(\d{2}[./]\d{2}[./]\d{4})\s+"
-            r"(-?\d{{1,3}}(?:\.\d{{3}})*,\d{{1,6}}|-?\d+[,\.]?\d*)\s+"
-            r"(-?\d{{1,3}}(?:\.\d{{3}})*,\d{{1,6}}|-?\d+[,\.]?\d*)\s+"
-            r"(-?\d{{1,3}}(?:\.\d{{3}})*,\d{{1,6}}|-?\d+[,\.]?\d*)\s+"
-            r"(-?\d{{1,3}}(?:\.\d{{3}})*,\d{{1,6}}|-?\d+[,\.]?\d*)\s+"
-            r"([\d\.]+|A/D|AD)?\s*"
-            r"([\d.,]+|A/D|AD)?",
+            rf"(\d{{2}}[./]\d{{2}}[./]\d{{4}})\s+"
+            rf"({tr_num})\s+"
+            rf"({tr_num})",
             flags=re.I,
         )
 
-        for m in pattern.finditer(block):
-            date_s = m.group(1)
+        for m in direct_pattern.finditer(block):
+            date_s = m.group(1).replace("/", ".")
             rate_s = m.group(2)
-            amount_s = m.group(3)  # Hisse Başı Brüt TL
+            amount_s = m.group(3)
+
             try:
-                ex_date = dt.strptime(date_s.replace("/", "."), "%d.%m.%Y").date()
+                ex_date = dt.strptime(date_s, "%d.%m.%Y").date()
             except Exception:
                 continue
-            amount = _parse_tr_number(amount_s)
+
             rate = _parse_tr_number(rate_s) or 0.0
+            amount = _parse_tr_number(amount_s)
+
+            # Hisse başı temettü makul aralıkta olmalı. 0-10.000 TL aralığı yeterince geniş.
             if amount and 0 < amount < 10000:
-                rows.append({"ex_date": ex_date, "amount": amount, "rate": rate})
+                rows.append({
+                    "ex_date": ex_date,
+                    "amount": amount,
+                    "rate": rate,
+                })
 
         if rows:
             return DividendFetcher._dedupe_sort(rows)
 
-        # Fallback: pandas read_html ile kolon bazlı parse.
-        return DividendFetcher._parse_generic_dividend_tables(html, symbol)
-
-    @staticmethod
-    def _parse_generic_dividend_tables(html: str, symbol: str) -> list:
-        from datetime import datetime as dt
-
-        symbol = symbol.upper()
-        rows = []
-
+        # Fallback 1: tablo parse. HTML yapısı değişirse işe yarar.
         try:
             tables = pd.read_html(StringIO(html), decimal=",", thousands=".")
         except Exception:
             tables = []
 
         for df in tables:
-            # MultiIndex kolonları sadeleştir.
             df = df.copy()
-            df.columns = [" ".join([str(x) for x in c if str(x) != "nan"]).strip() if isinstance(c, tuple) else str(c).strip() for c in df.columns]
-            cols = list(df.columns)
-            low_cols = [c.lower() for c in cols]
+            df.columns = [
+                " ".join([str(x) for x in c if str(x) != "nan"]).strip()
+                if isinstance(c, tuple) else str(c).strip()
+                for c in df.columns
+            ]
 
-            # Temettüyle ilgisiz tabloları at.
-            joined = " ".join(low_cols)
-            if not any(k in joined for k in ["temett", "hisse baş", "hisse basi", "dağ", "dag"]):
+            cols = list(df.columns)
+            low_join = " ".join(c.lower() for c in cols)
+
+            if not any(k in low_join for k in ["temett", "hisse baş", "hisse basi", "dağ", "dag"]):
                 continue
 
-            sym_col = next((c for c in cols if c.lower() in {"kod", "sembol", "hisse"} or "kod" in c.lower()), None)
+            symbol_col = next((c for c in cols if c.lower() in {"kod", "sembol", "hisse"} or "kod" in c.lower()), None)
             date_col = next((c for c in cols if any(k in c.lower() for k in ["tarih", "dağ", "dag"])), None)
-            amount_col = next((c for c in cols if ("hisse" in c.lower() and ("tl" in c.lower() or "baş" in c.lower() or "basi" in c.lower()))), None)
+            amount_col = next((c for c in cols if "hisse" in c.lower() and ("tl" in c.lower() or "baş" in c.lower() or "basi" in c.lower())), None)
             rate_col = next((c for c in cols if "verim" in c.lower()), None)
 
             if not date_col or not amount_col:
                 continue
 
             for _, row in df.iterrows():
-                if sym_col:
-                    raw_sym = str(row.get(sym_col, "")).upper()
-                    if symbol not in raw_sym:
+                if symbol_col:
+                    raw_symbol = str(row.get(symbol_col, "")).strip().upper()
+                    if symbol not in raw_symbol:
                         continue
+
                 date_raw = str(row.get(date_col, ""))
                 dm = re.search(r"(\d{2})[./](\d{2})[./](\d{4})", date_raw)
                 if not dm:
                     continue
+
                 try:
                     d, m, y = map(int, dm.groups())
                     ex_date = dt(y, m, d).date()
                 except Exception:
                     continue
+
                 amount = _parse_tr_number(row.get(amount_col))
                 rate = _parse_tr_number(row.get(rate_col)) if rate_col else 0.0
+
                 if amount and 0 < amount < 10000:
-                    rows.append({"ex_date": ex_date, "amount": amount, "rate": rate or 0.0})
+                    rows.append({
+                        "ex_date": ex_date,
+                        "amount": amount,
+                        "rate": rate or 0.0,
+                    })
 
         if rows:
             return DividendFetcher._dedupe_sort(rows)
 
-        # Son fallback: düz metinde sembol + tarih + iki sayı yakala.
-        text = _clean_text(html)
-        block = DividendFetcher._extract_dividend_block(text)
-        pattern = re.compile(
-            rf"\b{re.escape(symbol)}\b\s+(\d{{2}}[./]\d{{2}}[./]\d{{4}})\s+"
-            r"(-?\d{1,3}(?:\.\d{3})*,\d{1,6}|-?\d+[,\.]?\d*)\s+"
-            r"(-?\d{1,3}(?:\.\d{3})*,\d{1,6}|-?\d+[,\.]?\d*)",
-            flags=re.I,
-        )
-        for m in pattern.finditer(block):
+        # Fallback 2: satır satır tarama.
+        for line in re.split(r"(?=\b[A-Z]{3,6}\b\s+\d{2}[./]\d{2}[./]\d{4})", block):
+            if not re.search(rf"\b{re.escape(symbol)}\b", line):
+                continue
+            m = direct_pattern.search(line)
+            if not m:
+                continue
+
             try:
                 ex_date = dt.strptime(m.group(1).replace("/", "."), "%d.%m.%Y").date()
             except Exception:
                 continue
-            rate = _parse_tr_number(m.group(2)) or 0.0
+
             amount = _parse_tr_number(m.group(3))
+            rate = _parse_tr_number(m.group(2)) or 0.0
+
             if amount and 0 < amount < 10000:
-                rows.append({"ex_date": ex_date, "amount": amount, "rate": rate})
+                rows.append({
+                    "ex_date": ex_date,
+                    "amount": amount,
+                    "rate": rate,
+                })
 
         return DividendFetcher._dedupe_sort(rows)
+
