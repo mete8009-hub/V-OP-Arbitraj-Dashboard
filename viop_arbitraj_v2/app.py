@@ -50,6 +50,10 @@ from src.data_fetcher import DataFetcher, DividendFetcher
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
+APP_VERSION = "APP_DIVIDEND_CACHE_FIX_2026_04_30_V1"
+DIVIDEND_CACHE_VERSION = "DIVIDEND_FINAL_2026_04_30_V3"
+
+
 IST = pytz.timezone("Europe/Istanbul")
 
 # -----------------------------------------------------------------------------
@@ -331,7 +335,11 @@ def cached_fetch_market_data(symbols_tuple: Tuple[str, ...]) -> Tuple[Dict[str, 
 
 
 @st.cache_data(ttl=DIVIDEND_CACHE_TTL_SEC, show_spinner=False)
-def cached_fetch_dividends(symbols_tuple: Tuple[str, ...]) -> dict:
+def cached_fetch_dividends(symbols_tuple: Tuple[str, ...], cache_version: str = DIVIDEND_CACHE_VERSION) -> dict:
+    """
+    Temettü cache'i özellikle version parametresiyle kırılır.
+    data_fetcher.py değişse bile Streamlit eski 0 sonucunu tutabiliyor; bu parametre onu engeller.
+    """
     fetcher = DividendFetcher()
     return fetcher.fetch_dividends_bulk(list(symbols_tuple)) or {}
 
@@ -611,10 +619,30 @@ def display_df(df: pd.DataFrame, height: int = 420) -> None:
     st.dataframe(styled, use_container_width=True, hide_index=True, height=height)
 
 
+def count_dividends_until_max_expiry(divs: dict, today: date, contract_months: List[Tuple[int, int]]) -> int:
+    """Bugün ile ekranda gösterilen son vade arasında kalan temettü kaydı adedi."""
+    expiries = [ALL_EXPIRIES.get(k) for k in contract_months if ALL_EXPIRIES.get(k)]
+    if not expiries:
+        return 0
+    max_expiry = max(expiries)
+    count = 0
+    for rows in (divs or {}).values():
+        for r in rows or []:
+            ex = r.get("ex_date")
+            if ex and today < ex <= max_expiry:
+                count += 1
+    return count
+
+
 # -----------------------------------------------------------------------------
 # Sidebar
 # -----------------------------------------------------------------------------
 st.sidebar.title("Kontroller")
+st.sidebar.caption(f"Sürüm: {APP_VERSION}")
+
+if st.sidebar.button("Veri cache temizle ve yeniden çek"):
+    st.cache_data.clear()
+    st.rerun()
 
 mode = st.sidebar.radio(
     "Analiz Modu",
@@ -665,12 +693,15 @@ viop_contract_options = make_contract_options(selected_underlyings, contract_mon
 
 with st.spinner("Spot, VİOP ve temettü verileri çekiliyor..."):
     spots, viops = cached_fetch_market_data(tuple(sorted(selected_underlyings)))
-    divs = cached_fetch_dividends(tuple(sorted(selected_underlyings)))
+    divs = cached_fetch_dividends(tuple(sorted(selected_underlyings)), DIVIDEND_CACHE_VERSION)
 
 # Spot seçenekleri: veri kaynağından gelen tüm spot semboller + seçili dayanaklar
 spot_options = sorted(set(spots.keys()) | set(selected_underlyings))
 # VİOP seçenekleri: veri kaynağından gelen gerçek kontratlar + üretilen kontratlar
 viop_options = sorted(set(viops.keys()) | set(viop_contract_options))
+
+total_dividend_records = sum(len(v or []) for v in (divs or {}).values())
+active_window_dividend_records = count_dividends_until_max_expiry(divs, today, contract_months)
 
 # -----------------------------------------------------------------------------
 # Başlık
@@ -683,20 +714,28 @@ st.caption(
 
 render_header_pills(today, contract_months, len(selected_underlyings))
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 with c1:
     render_metric_card("Spot fiyat adedi", str(len(spots)), "İş Yatırım spot evreni")
 with c2:
     render_metric_card("VİOP fiyat adedi", str(len(viops)), "Seçili dayanaklardan çekilen kontratlar")
 with c3:
-    render_metric_card("Temettü kaydı", str(sum(len(v or []) for v in divs.values())), "Seçili evren içinde")
+    render_metric_card("Toplam temettü kaydı", str(total_dividend_records), "Geçmiş + planlanan")
 with c4:
+    render_metric_card("Vade aralığı temettü", str(active_window_dividend_records), "Bugün ile son vade arası")
+with c5:
     render_metric_card("Son güncelleme", now_ist().strftime("%H:%M:%S"), "Europe/Istanbul")
 
 if len(spots) == 0 or len(viops) == 0:
     st.warning(
         "Spot veya VİOP verisi boş görünüyor. Veri Testi sayfasından endpoint detaylarını kontrol et. "
         "Veri geldikten sonra bu ekran otomatik dolacaktır."
+    )
+
+if total_dividend_records > 0 and active_window_dividend_records == 0:
+    st.caption(
+        "Not: Temettü verisi geliyor; ancak seçili vade aralığında bugünden sonra dağıtımı olan kayıt bulunmadığı için "
+        "arbitraj hesaplarında temettü etkisi 0 görünebilir."
     )
 
 # -----------------------------------------------------------------------------
