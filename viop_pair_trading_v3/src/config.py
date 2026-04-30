@@ -83,3 +83,36 @@ def get_active_contract_months(today: date, count: int = 3) -> list:
 
 def days_to_maturity(today: date, expiry: date) -> int:
     return (expiry - today).days
+
+# -------------------------------------------------------------------
+# Sektör eşleme tablosu
+# Not: Bu sınıflama pair trading filtresi için operasyonel/işlevsel bir eşlemedir.
+# Kurumsal kullanımda BIST/KAP/kurum içi resmi sektör sınıflamasıyla güncellenebilir.
+# -------------------------------------------------------------------
+SECTOR_MAP = {
+    "AEFES": "Tüketim", "AGHOL": "Holding", "AKBNK": "Bankacılık",
+    "AKSEN": "Enerji", "ALARK": "Holding", "ARCLK": "Dayanıklı Tüketim",
+    "ASELS": "Savunma/Sanayi", "ASTOR": "Elektrik Ekipmanları",
+    "BIMAS": "Perakende", "BRSAN": "Sanayi", "CCOLA": "Tüketim",
+    "CIMSA": "Çimento", "DOAS": "Otomotiv", "DOHOL": "Holding",
+    "EKGYO": "GYO", "ENJSA": "Enerji", "ENKAI": "Taahhüt/Holding",
+    "EREGL": "Demir-Çelik", "FROTO": "Otomotiv", "GARAN": "Bankacılık",
+    "GUBRF": "Kimya/Gübre", "HALKB": "Bankacılık", "HEKTS": "Tarım/Kimya",
+    "ISCTR": "Bankacılık", "ISDMR": "Demir-Çelik", "KCHOL": "Holding",
+    "KONTR": "Elektrik Ekipmanları", "KORDS": "Sanayi", "KOZAA": "Madencilik",
+    "KOZAL": "Madencilik", "KRDMD": "Demir-Çelik", "MGROS": "Perakende",
+    "ODAS": "Enerji", "OYAKC": "Çimento", "PETKM": "Petrokimya",
+    "PGSUS": "Havacılık", "SAHOL": "Holding", "SASA": "Petrokimya",
+    "SISE": "Cam/Kimya", "SOKM": "Perakende", "TAVHL": "Havacılık",
+    "TCELL": "Telekom", "THYAO": "Havacılık", "TKFEN": "Taahhüt/Sanayi",
+    "TOASO": "Otomotiv", "TRALT": "Madencilik", "TRMET": "Madencilik",
+    "TSKB": "Bankacılık", "TTKOM": "Telekom", "TUPRS": "Enerji/Rafineri",
+    "ULKER": "Tüketim", "VAKBN": "Bankacılık", "VESTL": "Elektronik",
+    "YKBNK": "Bankacılık",
+}
+
+
+def get_sector(symbol: str) -> str:
+    """Sembol için sektör etiketini döndürür."""
+    return SECTOR_MAP.get(str(symbol or "").strip().upper(), "Diğer")
+
